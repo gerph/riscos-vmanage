@@ -1,5 +1,6 @@
-Quick intro
------------
+# Commit script for CVS
+
+## Quick intro
 
 The 'commit' script is intended to be used with CVS components in order to
 maintain a standardised task-based version numbering system. This script has
@@ -8,8 +9,7 @@ script is used by myself. More information about the use of the tool can
 be found with 'commit -help'.
 
 
-Example usage
--------------
+## Example usage
 
 Create a new component:
   prompt> cd ComponentDirectory
