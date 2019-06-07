@@ -1,0 +1,1228 @@
+#!/usr/bin/perl
+# Version 1.1 (11 Mar 2002) - support for RISC OS/Unix
+# Version 1.2 (12 Mar 2002) - support for branches
+# Version 1.3 (07 Jan 2003) - updated branch tag format
+# Version 1.4 (12 Jul 2003) - fix for filenames including special perl symbols
+
+# debug demo configuration
+$usecvs=1;
+
+# set up OS-type
+if (($^O eq "") ||
+    ($^O =~ /riscos/i))
+{ $riscos=1; $dirsep="."; $versionbas="VersionBas"; }
+else
+{ $riscos=0; $dirsep="/"; $versionbas="VersionBas,ffb"; }
+
+$directory=`pwd`;
+$directory=~ tr!./!/.! if ($riscos); # swap paths
+$directory=~ s/[\n\r]//g; # remove trailing nl or cr (probably RO only)
+
+if ($directory=~m!/([^/]*?)$!)
+{ $componentleaf=$1; $componentname=$1; }
+else
+{
+  die "Could not read component name (from '$directory')\n";
+}
+
+while (defined($arg=shift))
+{
+  if ($arg=~/^-/)
+  {
+    $opt=$';
+    if ($opt eq "new")       # create VersionNum file
+    { $new=1; }
+    elsif ($opt eq "noupdate")  # don't update VersionNum file
+    { $noupdate=1; }
+    elsif ($opt eq "notag")     # don't tag after checkin
+    { $notag=1; }
+    elsif ($opt eq "nomodules") # don't add to modules
+    { $nomodules=1; }
+    elsif ($opt eq "status")    # just read the status
+    { $status=1; }
+    elsif ($opt eq "justupdate") # only update the files - don't commit
+    {
+      $nocommit=1;
+      $notag=1;
+    }
+    elsif ($opt eq "addasm") # add the assembler file
+    {
+      $makeasm=1;
+      $vfilesonly=1;
+      $noupdate=2;
+    }
+    elsif ($opt eq "addlog") # add the log file
+    {
+      $makelog=1;
+      $vfilesonly=1;
+      $noupdate=2;
+    }
+    elsif ($opt eq "addbasic") # add the basic file
+    {
+      $makebasic=1;
+      $vfilesonly=1;
+      $noupdate=2;
+    }
+    elsif ($opt eq "name")         # set the name of this component
+    {
+      $componentname=shift || die "-name must be given a parameter";
+    }
+    elsif ($opt eq "branch")       # we're creating a branch
+    {
+      $newbranch=shift || die "-branch must be given a parameter";
+      $vfilesonly=1;
+      $noupdate=2;
+    }
+    elsif ($opt eq "help" || $opt eq "h")
+    {
+      &syntax;
+      &help;
+      die "No files commited\n";
+    }
+    else
+    {
+      &syntax;
+      die "Unrecognised option $arg\n";
+    }
+  }
+  else
+  {
+    &syntax;
+    die "Unrecognised parameter $arg\n";
+  }
+}
+
+# if we're doing a demo of this, don't actually do anything
+if (!$usecvs)
+{
+  # $noupdate=2;
+  $nocommit=1;
+  $notag=1;
+}
+
+# (check if we have a CVS directory here first)
+if ($usecvs)
+{
+  if (!open(CVSENTRIES,"< CVS${dirsep}Entries"))
+  {
+    die "There are no CVS files here. Check these files in first.\n";
+  }
+  close(CVSENTRIES);
+}
+
+($componentname,$componentpath)=&readcomponentname($componentname);
+
+print "Component: $componentname\n";
+
+if ($new)
+{
+  # Create new VersionNum file
+  if (open(VERSION,"< VersionNum"))
+  {
+    die "VersionNum file already exists!\n";
+  }
+
+  do
+  {
+    print "Initial version number ? ";
+    $version=<STDIN>;
+  } while (($version!~/^[0-9]+\.[0-9][0-9]$/) || ($version eq ""));
+  
+  if (!$nomodules)
+  {
+    &updatemodules($componentname);
+  }
+  else
+  {
+    print "Not updating modules\n";
+  }
+  
+  # Check for special files
+  if ($makeasm)
+  {
+    if (!open(ASM,"> VersionAsm"))
+    { die "Could not create VersionAsm\n"; }
+    close(ASM);
+    $files.=" VersionAsm";
+  }
+  if ($makelog)
+  {
+    &initlog;
+    $files.=" VersionLog";
+  }
+  if ($makebasic)
+  {
+    if (!open(BAS,"> $versionbas"))
+    { die "Could not create $versionbas\n"; }
+    if ($riscos)
+    {
+      print "Setting type of $versionbas as BASIC\n";
+      system "SetType $versionbas BASIC";
+    }
+    close(BAS);
+  }
+  
+  # Create a VersionNum file
+  ($version,$vhigh,$vlow,$minor,$vfiles)=&writeversion($version,"");
+
+  # Add to local repository
+  if ($usecvs)
+  {
+    $exitcode=&my_system("cvs add $vfiles")/256;
+    if ($exitcode != 0)
+    {
+      unlink split(" ",$vfiles);
+      die "Failed to add VersionNum file to CVS repository\n";
+    }
+  }
+    
+  # Now commit the VersionNum file
+  if (!$nocommit)
+  {
+    $exitcode=&my_system("cvs commit -m \"Created VersionNum file\" $vfiles")/256;
+    if ($exitcode != 0)
+    {
+      # tidy up
+      &my_system("cvs remove -f $vfiles");
+      &my_system("cvs commit -m \"Removed VersionNum file (commit error)\" $vfiles");
+      die "Failed to add VersionNum file to CVS repository\n";
+    }
+    $status="Created VersionNum at $version";
+  }
+  else
+  {
+    $status="Created VersionNum at $version, uncommited";
+  }
+
+  # and we don't want to tag this component
+  $notag=1;
+}
+else
+{
+  # Check that the files have actually changed
+  if (!$nocommit && !$vfilesonly && $usecvs)
+  {
+    print "Checking up-to-date-ness\n" if (!$status);
+    if (!open(CVS," cvs -q status |"))
+    {
+      die "Failed to pipe CVS status: $!\n";
+    }
+    $errors=0;
+    $changed=0;
+    $repositoryroot="";
+    $f_added="";
+    $f_removed="";
+    $f_changed="";
+    while (<CVS>)
+    {
+      if (/Repository revision:\t[^\t]*?\t(.*?),v$/)
+      {
+        $repository=$1;
+        if ($repositoryroot eq "")
+        {
+          if ($directory=~m!/([^/]*?/[^/]*?)$!)
+          {
+            $toptwo=$1;
+          }
+          else
+          {
+            die "Can't find local directory names\n";
+          }
+          if ($repository=~m!/$toptwo/!)
+          {
+            $repositoryroot="$`/$toptwo";
+          }
+          else
+          {
+            if ($repository=~m!/$componentleaf/!)
+            {
+              $repositoryroot="$`/$componentleaf";
+            }
+          }
+        }
+        $repository=~s!^$repositoryroot/!!;
+        if ($note ne "")
+        {
+          $safefile = q{$file};
+          $repository=~s!/Attic/$safefile$!/$safefile!;
+          $repository=~s!^Attic/$safefile$!$safefile!;
+          if ($note eq "added")
+          { $f_added.="\n$repository"; }
+          elsif ($note eq "removed")
+          { $f_removed.="\n$repository"; }
+          elsif ($note eq "changed")
+          { $f_changed.="\n$repository"; }
+          $note="$repository: $note";
+          print "$note\n";
+          $note="";
+        }
+      }
+      elsif (/^File: (.*?)\s*Status: (.*?)\n/)
+      {
+        $file=$1;
+        $state=$2;
+        if ($state eq "Up-to-date")
+        { # all is well
+          $note="";
+        }
+        elsif ($state eq "Needs Checkout")
+        {
+          $file=~s/^no file //;
+          $note="needs checking out";
+          $errors++;
+        }
+        elsif ($state eq "Locally Removed")
+        {
+          $file=~s/^no file //;
+          $note="removed";
+          $changed++;
+        }
+        elsif ($state eq "Locally Modified")
+        {
+          $note="changed";
+          $changed++;
+        }
+        elsif ($state eq "Locally Added")
+        {
+          $note="added";
+          $changed++;
+        }
+        else
+        {
+          $note="unknown state: $state";
+          $errors++;
+        }
+      }
+    }
+    if (!close(CVS))
+    {
+      die "Closing the CVS pipe gave error: $!\n";
+    }
+    if ($errors)
+    {
+      die "Failed up-to-date check\n";
+    }
+    if ($changed==0)
+    {
+      die "No files changed\n";
+    }
+    if ($status)
+    {
+      exit(0);
+    }
+  }
+
+  # Create files that wouldn't otherwise exist
+  if ($makeasm)
+  {
+    if (!open(ASM,"> VersionAsm"))
+    { die "Could not create VersionAsm\n"; }
+    close(ASM);
+  }
+  if ($makebasic)
+  {
+    if (!open(ASM,"> $versionbas"))
+    { die "Could not create $versionbas\n"; }
+    close(ASM);
+  }
+  if ($makelog)
+  {
+    &initlog;
+  }
+  
+  # Update VersionNum file
+  ($version,$vhigh,$vlow,$minor,$vfiles)=&readversion;
+
+  $oldversion=$version;
+  $oldminor=$minor;
+  
+  if ($newbranch ne "")
+  {
+    # remember what our branch is
+    $minor=$newbranch;
+    $newbranch.="-branch";
+  }
+    
+  if ($noupdate==1)
+  {
+    ($version,$vhigh,$vlow,$minor,$vfiles)=&writeversion("$vhigh.$vlow",$minor);
+    $status="VersionNum held at $version";
+  }
+  else
+  {
+    if ($noupdate==2)
+    {
+      $status="VersionNum held at $version (new files added)";
+    }
+    else
+    {
+      $vlow+=1; while ($vlow>99) { $vhigh+=1; $vlow-=100; }
+    }
+    ($version,$vhigh,$vlow,$minor,$vfiles)=&writeversion("$vhigh.$vlow",$minor);
+    if ($noupdate!=2)
+    {
+      $status="VersionNum updated to $version";
+    }
+  }
+
+  # New branch if necessary
+  if ($newbranch ne "" && $usecvs)
+  {
+    # Create the branch
+    $exitcode=&my_system("cvs tag -b $newbranch")/256;
+    if ($exitcode != 0)
+    {
+      &writeversion($oldversion,$oldminor); # restore VersionNum
+      die "Could not create branch in CVS repository\n";
+    }
+    # Move on to the branch
+    $exitcode=&my_system("cvs update -r $newbranch")/256;
+    if ($exitcode != 0)
+    {
+      &writeversion($oldversion,$oldminor); # restore VersionNum
+      # then delete the branch
+      $exitcode=&my_system("cvs tag -d $newbranch")/256;
+      die "Could not move on to branch in local directory\n";
+    }
+  }
+  
+  # Add the assembler file if necessary
+  if ($makeasm && $usecvs)
+  {
+    # Add to local repository
+    $exitcode=&my_system("cvs add VersionAsm")/256;
+    if ($exitcode != 0)
+    {
+      &writeversion($oldversion,$oldminor); # restore VersionNum
+      unlink "VersionAsm";
+      die "Failed to add VersionAsm file to CVS repository\n";
+    }
+  }
+
+  # and the Basic one
+  if ($makebasic && $usecvs)
+  {
+    # Add to local repository
+    $exitcode=&my_system("cvs add $versionbas")/256;
+    if ($exitcode != 0)
+    {
+      &writeversion($oldversion,$oldminor); # restore VersionNum
+      unlink "$versionbas";
+      die "Failed to add $versionbas file to CVS repository\n";
+    }
+  }
+
+  # and the log
+  if ($makelog && $usecvs)
+  {
+    # Add to local repository
+    $exitcode=&my_system("cvs add VersionLog")/256;
+    if ($exitcode != 0)
+    {
+      &writeversion($oldversion,$oldminor); # restore VersionNum
+      unlink "VersionLog";
+      die "Failed to add VersionLog file to CVS repository\n";
+    }
+  }
+  
+  # Commit everything
+  if (!$nocommit)
+  {
+    if ($vfilesonly)
+    {
+      if ($newbranch ne "")
+      {
+        $cmd="cvs commit -m \"Created branch : $newbranch\" $vfiles";
+      }
+      else
+      {
+        $cmd="cvs commit -m \"Version files now : $vfiles\" $vfiles";
+      }
+      $exitcode=&my_system($cmd)/256;
+    }
+    else
+    {
+      my ($extra,$tagging);
+      if ($riscos)
+      { $temporary="<Wimp\$ScrapDir>.commit-tmp"; # doesn't work with RO CVS
+        $temporary="commit-tmp"; # use CSD :-(
+      }
+      else
+      { $temporary="/tmp/commit.$$"; }
+      if (!open(TEMP,"> $temporary"))
+      {
+        &writeversion($oldversion,$oldminor); # restore VersionNum
+        die "Failed to open temporary file, aborting\n";
+      }
+      $extra="";
+      
+      $tagging="Tag:\n  ";
+      $tagging.=&minor_to_branch($minor)."--" if ($minor ne "");
+      $tagging.="$componentname";
+      $tagging.="-$version\n";
+      $tagging=~tr/./_/;
+      if ($noupdate)
+      {
+        $extra.=" held";
+        $tagging =~ s/\n$/ (retagged)\n/;
+      }
+      if ($notag)
+      {
+        $extra.=" not tagged";
+        $tagging="";
+      }
+
+      print TEMP <<EOM;
+Summary:
+  (overview of change)
+Detail:
+  (list files and functions that have changed)
+Admin:
+  (highlight level of testing that has taken place)
+  (bugfix number if appropriate)
+$tagging
+CVS: ----------------------------------------------------------------------
+CVS: Enter Log.  Lines beginning with `CVS:' are removed automatically
+CVS:
+CVS: Component: $componentname $version$extra
+EOM
+      if (open(TAG,"< CVS${dirsep}Tag"))
+      {
+        $tag=<TAG>;
+        chomp($tag);
+        $tag=~s/^.//;
+        close(TAG);
+        print TEMP "CVS: Branch is $tag\n";
+      }
+      print TEMP "CVS:\n";
+      if ($f_added ne "")
+      {
+        $files=$f_added;
+        $files=~s/\n/\nCVS:    /g;
+        print TEMP "CVS: Added files:$files\n";
+      }
+      if ($f_removed ne "")
+      {
+        $files=$f_removed;
+        $files=~s/\n/\nCVS:    /g;
+        print TEMP "CVS: Removed files:$files\n";
+      }
+      if ($f_changed ne "")
+      {
+        $files=$f_changed;
+        $files=~s/\n/\nCVS:    /g;
+        print TEMP "CVS: Modified files:$files\n";
+      }
+      print TEMP <<EOM;
+CVS: ----------------------------------------------------------------------
+EOM
+      close(TEMP);
+      $editor=$ENV{'CVSEDITOR'};
+      if ($riscos && !defined($editor))
+      { $editor=$ENV{'CVS$Editor'}; }
+      if ($riscos && !defined($editor))
+      { $editor=$ENV{'cvs$editor'}; } # just in case they used lower case
+      if (!defined($editor))
+      { $editor=$ENV{'EDITOR'};
+        if ($riscos && !defined($editor))
+        { $editor=$ENV{'Editor'}; }
+        if ($riscos && !defined($editor))
+        { $editor=$ENV{'editor'}; } # just in case they used lower
+        if (!defined($editor))
+        {
+          # nyah screw it... RISC OS is just going to fail this
+          $editor="/usr/bin/vi";
+        }
+      }
+      # ($dev,$ino,$mode,$nlink,$uid,$gid,$rdev,$size,
+       # $atime,$mtime,$ctime,$blksize,$blocks)
+           # = stat($temporary);
+      ($a,$a,$a,$a,$a,$a,$a,$a,$a,$ourtime,$a,$a,$a) = stat($temporary);
+      $exitcode=&my_system("$editor $temporary")/256; # call editor
+      ($a,$a,$a,$a,$a,$a,$a,$a,$a,$theirtime,$a,$a,$a) = stat($temporary);
+      if (($ourtime == $theirtime) || ($exitcode != 0))
+      {
+        unlink($temporary);
+        &writeversion($oldversion,$oldminor); # restore VersionNum
+        die "Log not edited, aborting commit\n" if ($exitcode == 0);
+        print "'$editor' was called\n";
+        die "Editor exited with $exitcode, aborting commit\n";
+      }
+      if (!open(TEMP,"< $temporary"))
+      { # couldn't read temp file
+        unlink($temporary);
+        &writeversion($oldversion,$oldminor); # restore VersionNum
+        die "Failed to read temporary file, aborting\n";
+      }
+      $log="";
+      while (<TEMP>)
+      {
+        if (!/^CVS:/)
+        {
+          $log.=$_;
+        }
+      }
+      close(TEMP);
+      if (!open(TEMP,"> $temporary"))
+      {
+        unlink($temporary);
+        &writeversion($oldversion,$oldminor); # restore VersionNum
+        die "Failed to re-write temporary file, aborting\n";
+      }
+      print TEMP $log;
+      close(TEMP);
+      
+      # print "THIS IS NOT WORKING AT PRESENT!!!";
+      # unlink($temporary);
+      # # what we need is a means of knowing whether the VersionNum and/or
+      # # VersionLog files are going to be updated or not.
+      # &writeversion($oldversion,$oldminor); # restore VersionNum
+      # exit(1);
+
+      $temporary_unix=$temporary;
+      if ($riscos)
+      { $temporary_unix=~tr!./!/.!;
+        # $temporary_unix="/$temporary_unix"; # don't do this for local log
+      }
+      $cmd="cvs commit -F $temporary_unix";
+      $exitcode=&my_system($cmd)/256;
+      unlink($temporary);
+    }
+    if ($exitcode != 0)
+    {
+      # tidy up
+      &writeversion($oldversion,$oldminor); # restore VersionNum
+      die "Failed to commit component\n";
+    }
+  }
+  else
+  {
+    $status.=", uncommited"
+  }
+}
+
+if (!$notag)
+{
+  $tag="";
+  $tag=&minor_to_branch($minor)."--" if ($minor ne "");
+  $tag.="$componentname";
+  $tag.="-$version";
+  $tag=~tr/./_/;
+  $status.=", tagged as $tag";
+  $tag =~ s/^([0-9])/X$1/; # ensure the first char isn't a digit
+  # Tag everything
+  if ($vfilesonly)
+  {
+    $exitcode=&my_system("cvs tag -F $tag $vfiles")/256;
+    $status.=", tagged Version files only";
+  }
+  else
+  {
+    $exitcode=&my_system("cvs tag -F $tag")/256;
+  }
+  if ($exitcode != 0)
+  {
+    die "Failed to tag directory\n";
+  }
+}
+else
+{
+  $status.=", untagged";
+}
+
+print "$status\n";
+
+# end of main code
+
+sub readversion
+{
+  my ($version,$vhigh,$vlow,$minor,$vfiles);
+  if (!open(VERSION,"< VersionNum"))
+  {
+    die "Failed to read VersionNum file - are you at the root of this component ?\n";
+  }
+  
+  $vfiles="VersionNum";
+  $version="0.00";
+  $vhigh="0";
+  $vlow="0";
+  $minor="";
+  while (<VERSION>)
+  {
+    if (/^#define Module_MajorVersion_CMHG\s*(.*?)\s*$/)
+    {
+      $version=$1;
+      $version=~/([0-9]+)\.([0-9][0-9])/;
+      $vhigh=$1;
+      $vlow=$2;
+    }
+    if (/^#define Module_MinorVersion_CMHG\s*(.*?)\s*$/)
+    { $minor=$1; }
+  }
+  close(VERSION);
+
+  if (-f "VersionAsm")
+  {
+    $vfiles.=" VersionAsm";
+  }
+  
+  if (-f "VersionLog")
+  {
+    $vfiles.=" VersionLog";
+  }
+  return ($version,$vhigh,$vlow,$minor,$vfiles);
+}
+
+sub minor_to_branch
+{
+  local ($branch)=@_;
+  $branch=~s/ /_/g;  # remove spaces from minor version to give branch name
+  $branch=~s/\./-/g; # periods become hyphens
+  return $branch;
+}
+
+sub writeversion
+{
+  my ($version,$minor)=@_;
+  my ($vlow,$vhigh,$vnum,$vfiles);
+  my ($fullversion,$fullversionanddate);
+  my ($appdate2,$appdate4);
+  my ($writetime);
+  my ($branch);
+  my ($sec,$min,$hour,$mday,$mon,$year,$wday,$yday,$isdst);
+  if ($version!~/^([0-9]+)\.([0-9][0-9]?)/)
+  { die "Bad version string ($version)\n"; }
+  $vhigh=$1;
+  $vlow=$2;
+  if ($vlow < 10)
+  { $vlow="0".($vlow+0); }
+  else
+  { $vlow=$vlow+0; }
+  $version="$vhigh.$vlow";
+  ($sec,$min,$hour,$mday,$mon,$year,$wday,$yday,$isdst) = localtime(time);
+  $writetime=sprintf("%02d:%02d:%02d $mday/%d/".($year+1900), $hour, $min,
+                     $sec,$mon+1);
+  if ($mday<10)
+  { $mday="0".($mday+0); }
+  else
+  { $mday=$mday+0; }
+  $year=$year+1900;
+  if ($mon==0) { $mon="Jan"; }
+  elsif ($mon==1) { $mon="Feb"; }
+  elsif ($mon==2) { $mon="Mar"; }
+  elsif ($mon==3) { $mon="Apr"; }
+  elsif ($mon==4) { $mon="May"; }
+  elsif ($mon==5) { $mon="Jun"; }
+  elsif ($mon==6) { $mon="Jul"; }
+  elsif ($mon==7) { $mon="Aug"; }
+  elsif ($mon==8) { $mon="Sep"; }
+  elsif ($mon==9) { $mon="Oct"; }
+  elsif ($mon==10) { $mon="Nov"; }
+  elsif ($mon==11) { $mon="Dec"; }
+  $date="$mday $mon $year";
+  if (!open(VERSION,"> VersionNum"))
+  { die "Could not open VersionNum file\n"; }
+  $vnum=$vhigh*100 + $vlow;
+  $appdate2="$mday-$mon-" . (substr $year,-2);
+  $appdate4="$mday-$mon-$year";
+  $branch=&minor_to_branch($minor);
+  if ($minor ne "")
+  {
+    $fullversion="$version $minor";
+    $fullversionanddate="$version ($date) $minor";
+  }
+  else
+  {
+    $fullversion="$version";
+    $fullversionanddate="$version ($date)";
+  }
+  print VERSION <<EOM;
+/* $componentname ($version) $writetime
+ *
+ * This file is automatically maintained by commit, do not edit manually.
+ *
+ */
+#define Module_MajorVersion_CMHG        $version
+#define Module_MinorVersion_CMHG        $minor
+#define Module_Date_CMHG                $date
+
+#define Module_MajorVersion             "$version"
+#define Module_Version                  $vnum
+#define Module_MinorVersion             "$minor"
+#define Module_Date                     "$date"
+
+#define Module_ApplicationDate2         "$appdate2"
+#define Module_ApplicationDate4         "$appdate4"
+
+#define Module_ComponentName            "$componentname"
+#define Module_ComponentBranch          "$branch"
+#define Module_ComponentPath            "$componentpath"
+
+#define Module_FullVersion              "$fullversion"
+#define Module_FullVersionAndDate       "$fullversionanddate"
+#define Module_HelpVersion              "$fullversionanddate"
+EOM
+  close(VERSION);
+  $vfiles="VersionNum";
+  
+  # now check for a VersionAsm file
+  if (-f "VersionAsm")
+  {
+    if (!open(VERSION,"> VersionAsm"))
+    { die "Could not open VersionAsm file\n"; }
+    print VERSION <<EOM;
+; ($version)
+;
+; This file is automatically maintained by commit, do not edit manually.
+;
+;
+                          GBLS   Module_MajorVersion
+                          GBLS   Module_MinorVersion
+                          GBLA   Module_Version
+                          GBLS   Module_Date
+                          GBLS   Module_FullVersion
+                          GBLS   Module_FullVersionAndDate
+                          GBLS   Module_ComponentName
+                          GBLS   Module_ComponentBranch
+                          GBLS   Module_ComponentPath
+Module_MajorVersion       SETS   "$version"
+Module_MinorVersion       SETS   "$minor"
+Module_Version            SETA   $vnum
+Module_Date               SETS   "$date"
+Module_FullVersion        SETS   "$fullversion"
+Module_FullVersionAndDate SETS   "$fullversionanddate"
+Module_ComponentName      SETS   "$componentname"
+Module_ComponentBranch    SETS   "$branch"
+Module_ComponentPath      SETS   "$componentpath"
+
+                          END
+EOM
+    close(VERSION);
+    $vfiles.=" VersionAsm";
+  }
+  
+  # Check for a VersionBas file
+  if (-f "$versionbas")
+  {
+    my ($acc,$basic);
+    if (!open(VERSION,"> $versionbas"))
+    { die "Could not open $versionbas file\n"; }
+    $basic=<<EOM;
+
+REM >VersionBas
+REM ($version)
+REM This file is automatically maintained by commit, do not edit
+DEFPROCinit_version
+version_major\$="$version"
+version_minor\$="$minor"
+version_number\%=$vnum
+version_date\$="$date"
+version_componentname\$="$componentname"
+version_componentbranch\$="$branch"
+version_componentpath\$="$componentpath"
+version_full\$="$fullversion"
+version_fullanddate\$="$fullversionanddate"
+ENDPROC
+EOM
+    $basic=~s/\nREM/\n\xf4/mg;
+    $basic=~s/\nDEFPROC/\n\xdd\xf2/mg;
+    $basic=~s/\nENDPROC/\n\xe1/mg;
+    $acc="";
+    while ($basic=~s/^\n(.*?)\n/\n/)
+    {
+      $acc.="\r\x00\x01".pack("c",4+length($1))."$1";
+    }
+    $acc.="\r\xff";
+    print VERSION "$acc";
+    close(VERSION);
+
+    $vfiles.=" $versionbas";
+  }
+  
+  if (-f "VersionLog")
+  {
+    my ($log,$title,$titlematch,$seenlog,$inlog);
+    print "Updating VersionLog...\n";
+    if (!open(LOG,"< VersionLog"))
+    { die "Failed to read VersionLog\n"; }
+    $log="";
+    $title.=("-" x 72) . "\n";
+    $title.="    Version $fullversion\n";
+    $title.=("-" x 72) . "\n";
+    $titlematch=$title;
+    $titlematch=~s/$fullversion/$fullversion.*?/;
+    $title=~s/$fullversion/$fullversion $writetime/;
+    $seenlog=0;
+    while (<LOG>)
+    {
+      if ($seenlog)
+      {
+        $log.=$_;
+      }
+      else
+      {
+        if ($_ eq (("-" x 72) ."\n"))
+        {
+          $log.=$title;
+          $inlog=$_;     # first -'s
+          $inlog.=<LOG>; # version
+          $inlog.=<LOG>; # second -'s
+          $log.=<LOG>;   # $log$
+          $log.=$inlog;  # and the version
+          $seenlog=1;
+        }
+        else
+        {
+          if (/^\$Log([^\$]*?)\$\n$/)
+          {
+            $log.=$title;
+            $seenlog=1;
+          }
+          $log.=$_;
+        }
+      }
+    }
+    # ensure only the first appears
+    while ($log=~s/$titlematch(.*?)$titlematch/$title$1/s)
+    {
+      # replace them all (might want to add logging here)
+    }
+    close(LOG);
+    if (!open(LOG,"> VersionLog"))
+    { die "Failed to write VersionLog\n"; }
+    print LOG $log;
+    close(LOG);
+
+    $vfiles.=" VersionLog";
+  }
+  return ($version,$vhigh,$vlow,$minor,$vfiles);
+}
+
+############################################################################
+sub updatemodules
+{
+  my ($module)=@_;
+  my ($path)="";
+  my ($dir)=$directory;
+  my ($ups)=0;
+
+  # if demoing, we don't want to do the modules check
+  if (!$usecvs)
+  {
+    print "Ignoring modules directory check\n";
+    return;
+  }  
+  $module=~tr/A-Z/a-z/; # Lower case component name
+  
+  while (!-d "CVSROOT")
+  {
+    if ($ups > 10)
+    {
+      die "Looking too high up the tree for component (path = $path)\n";
+    }
+    if ($riscos)
+    { chdir "^"; }
+    else
+    { chdir ".."; }
+    $ups++;
+    $dir=~s!/([^/]*?)$!!;
+    $path="$1/$path";
+  }
+  # print "Path: $path\n";
+  
+  if (!open(MODULES,"< CVSROOT${dirsep}modules"))
+  {
+    die "Failed to open modules file\n";
+  }
+  $modules="";
+  while (<MODULES>)
+  {
+    $modules.=$_;
+    if (/^$module\s/)
+    {
+      print "Warning: Component name collision in modules file; not adding\n";
+      if ($riscos)
+      { $path=~tr!./!/.!;
+        $path=~s/.$//;
+      }
+      # print "** Return to $path\n";
+      chdir $path;
+      # Return to the right directory
+      return;
+    }
+  }
+  close(MODULES);
+  if (open(MODULES,"> CVSROOT${dirsep}modules"))
+  {
+    if (length($modules) < 8)
+    { $modules.="$module\t\t-a $path\n"; }
+    else
+    { $modules.="$module\t-a $path\n"; }
+    print MODULES "$modules";
+    close(MODULES);
+    $exitcode=&my_system("cvs commit -m \"Added $module as $path\" CVSROOT${dirsep}modules\n")/256;
+    if ($exitcode !=0)
+    {
+      print "Warning: Failed to commit modules file\n";
+    }
+  }
+  else
+  {
+    print "Warning: Failed to update modules file - you'll need to do it manually\n";
+  }
+  
+  # return to where we were
+  if ($riscos)
+  { $path=~tr!./!/.!;
+    $path=~s/.$//;
+  }
+  # print "** Returning to $path\n";
+  chdir $path;
+}
+
+# Initialise the VersionLog file
+sub initlog
+{
+  if (!open(LOG,"> VersionLog"))
+  { die "Could not create VersionLog\n"; }
+  print LOG "Log file for $componentname\n";
+  print LOG ("=" x length("Log file for $componentname") ). "\n\n";
+  print LOG "\$Log\$\n";
+  close(LOG);
+}
+
+# Read the component name from the VersionNum file, if any
+sub readcomponentname
+{
+  my ($name)=@_;
+  my ($line,$path);
+  if (!open(VERSION,"< CVS${dirsep}Repository"))
+  { $path=""; }
+  else
+  { $path=<VERSION>;
+    chomp($path); }
+  if (!open(VERSION,"< VersionNum"))
+  { # No VersionNum, so assume same name as given
+    if ($path eq "")
+    { $path=$name; }
+    return ($name,$path);
+  }
+  $line=<VERSION>;
+  if ($line=~/^\/\* ([A-Za-z0-9_\-]+) /)
+  {
+    $name=$1;
+  }
+  else
+  { # no component name on the head line, search for Module_ComponentName
+    while ($line = <VERSION>)
+    {
+      if ($line =~ /^#define Module_ComponentName\s*"(.*?)"/)
+      {
+        $name=$1;
+        chomp($name);
+      }
+    }
+  }
+  close(VERSION);
+  if ($path eq "")
+  { $path=$name; }
+  return ($name,$path);
+}
+
+# Syntax message
+sub syntax
+{
+  print <<EOM;
+commit (c) Justin Fletcher
+Commits components to CVS, automatically updating version control files.
+Syntax: commit -new [-name <name>] [-nomodules] [<additional>]
+        commit -status
+        commit [-noupdate] [-notag] [-justupdate] [<additional>]
+
+-new         : Add new component, creating VersionNum file and adding to the
+               CVSROOT${dirsep}modules file
+-nomodules   : Don't add an entry to CVSROOT${dirsep}modules
+-name <name> : Specify a component name, rather than using that of the
+               source directory
+-status      : Display a brief 'up to date' check for this component
+-noupdate    : Don't update the VersionNum file (commits with the same tag
+               as last time)
+-notag       : Don't tag the files after commiting
+-justupdate  : Don't commit files, only update VersionNum, etc
+-branch <name>
+             : Create a branch.
+
+<additional> : [-addasm]   Add VersionAsm file
+               [-addlog]   Add VersionLog file
+               [-addbasic] Add $versionbas file
+EOM
+}
+
+# Help message
+sub help
+{
+  print <<EOM;
+Maintained files
+----------------
+
+VersionNum   : An C-style include file, for use with C, C++, CMHG, and
+               other C-style sources. The utility VTranslate will take
+               parameters from this file and allow them to be replaced
+               in plain text files or BASIC programs.
+VersionAsm   : Assembler version of the VersionNum file, using the same
+               names.
+VersionBas   : A BASIC library, providing PROCinit_version and similarly
+               (but not identically) named variables to VersionNum.
+VersionLog   : An automatically updated VersionLog, containing all the
+               log messages committed through this script with automatic
+               version separators.
+
+
+Version numbers
+---------------
+
+Version numbers are always of the form <major>.<minor>, where <major> is
+a single decimal digit, and <minor> is a pair of decimal digits. In the
+normal course of things you would start this version number at 0.00 and
+leave the number to increment automatically.
+
+If you wish to arbitrarily increase the version number you should modify
+Module_MajorVersion_CMHG in the VersionNum file. This is NOT recommended
+and may be allowed from the command line at some later date.
+
+When you commit any component it will automatically be tagged with the
+component name and version number in the form <component>-<major>_<minor>.
+
+
+Use on branches
+---------------
+
+commit -branch <name> will create a branch and commit the
+VersionNum/VersionBas/VersionAsm files on to that branch. You should then
+issue a normal commit command to update the versions of files which have
+been changed as normal. The -branch command merely creates the branch and
+ensures that the current component exists on it. The next commit will modify
+the files. The branch name given will have -branch appended to it to ensure
+that the entries are distinct from tags.
+
+
+New components
+--------------
+
+When creating a new component, you will be prompted for a version number
+to give the current version of the source. This version number is the
+version of the version you are working on.
+
+Adding a new component does not commit any files but the Version files. You
+should commit the component files themselves separately. When you commit the
+new sources for the first time, and for every subsequent time, the version
+number will be increased (unless you specify -noupdate).
+
+Example use:
+
+For a typical component, you might use:
+  prompt> cvs add MySource
+  ... cvs messages ...
+  prompt> cd MySource
+  prompt> cvs add c h Makefile *,* c/* h/*
+  ... cvs messages ...
+  prompt> commit -new -addlog
+  Component: MySource
+  Initial version number ? 0.00
+  ... commit and cvs messages ...
+  prompt> commit
+  ... edit your message and save ...
+  ... commit messages ...
+  ... tag messages ...
+
+
+Errors
+------
+
+A number of errors can be generated by the commit script. Some of these
+are :
+  VersionNum file already exists
+    - you've tried adding a new component where we believe one already
+      exists
+  Could not read component name
+    - commit must be able to read the name of the current directory for
+      the default component name
+  There are no CVS files here. Check these files in first.
+    - you need to at least add the current directory before you can
+      do anything
+  Failed to read VersionNum file - are you at the root of this component ?
+    - you've tried using commit where no VersionNum file exists; probably
+      you're sitting in a sub-directory of the component.
+  Could not open VersionNum/Bas/Asm file
+    - since the commit script started, the VersionNum/Bas/Asm file has
+      either moved or become inaccessible.
+  Editor exited with <blah>, aborting commit
+    - the editor spawned to provide a log message did not exit cleanly
+      and the commit has been aborted
+  Log not edited, aborting commit
+    - the log files timestamp hasn't changed, so you did nothing to it
+      and we're not going to allow that.
+  Looking too high up the tree for component (path = <blah>)
+    - To update the modules database, commit searched up the heirarchy
+      to find CVSROOT. If this cannot be found within a set number of
+      directories, commit gives up.
+
+
+Log file format
+---------------
+The default template for a log file is not taken from the CVS default
+template at present - we use our own internal format for this. This takes
+the form :
+
+Summary:
+  (overview of change)
+Detail:
+  (list files and functions that have changed)
+Admin:
+  (highlight level of testing that has taken place)
+  (bugfix number if appropriate)
+Tag:
+  <sometagname>
+
+You should replace the bracketed fields with the information requested if
+possible. If a section is redundant, it should be removed. The intention of
+this format is to structure log messages for speedier searching of logs.
+
+A typical log message might be :
+
+  Summary:
+    Added support for viewBox on outermost SVG element.
+    Added option to normalise the output.
+  Detail:
+    * viewBox attributes on the outermost SVG element are now obeyed and the
+      coordinates passed out to the plugin if necessary.
+      (c.element_svg/c.convertsvg)
+    * Normalisation (-n) will move the image such that it appears at the
+      origin in the output drawfile.
+      (c.convertsvg)
+  Admin:
+    Tested with a number of the images that Tonnie supplied that were
+    failing, as well as with the ubiquitous tiger. With normalisation, the
+    Tiger actually appears in the right place and looks very nice.
+  Tag:
+    convertsvg-1_20
+
+
+Nesting components
+------------------
+
+In general, it's not wise to place a component within another component, as
+this could be confusing. It will work just fine, but the tag names and
+version numbers may not make sense unless you're paying careful attention.
+Use this facility with care.
+
+EOM
+}
+
+# special system call so that we can see what we're trying to run
+sub my_system
+{
+  local ($cmd)=@_;
+  print "Running: $cmd\n";
+  return system($cmd);
+}
