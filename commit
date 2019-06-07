@@ -3,6 +3,8 @@
 # Version 1.2 (12 Mar 2002) - support for branches
 # Version 1.3 (07 Jan 2003) - updated branch tag format
 # Version 1.4 (12 Jul 2003) - fix for filenames including special perl symbols
+# Version 1.5 (31 Oct 2005) - fix for components including special perl symbols
+# Version 1.6 (04 Apr 2006) - tentative addition of 'added files' to CVS log editor details
 
 # debug demo configuration
 $usecvs=1;
@@ -215,37 +217,49 @@ else
     $f_changed="";
     while (<CVS>)
     {
-      if (/Repository revision:\t[^\t]*?\t(.*?),v$/)
+      chomp;
+      if (/Repository revision:\t[^\t]+?\t(.+?)$/ ||
+          /Repository revision:\tNo revision control file()$/)
       {
         $repository=$1;
-        if ($repositoryroot eq "")
+        if ($repository =~ s/,v$//)
         {
-          if ($directory=~m!/([^/]*?/[^/]*?)$!)
+          if ($repositoryroot eq "")
           {
-            $toptwo=$1;
-          }
-          else
-          {
-            die "Can't find local directory names\n";
-          }
-          if ($repository=~m!/$toptwo/!)
-          {
-            $repositoryroot="$`/$toptwo";
-          }
-          else
-          {
-            if ($repository=~m!/$componentleaf/!)
+            if ($directory=~m!/([^/]*?/[^/]*?)$!)
             {
-              $repositoryroot="$`/$componentleaf";
+              $toptwo=$1;
+            }
+            else
+            {
+              die "Can't find local directory names\n";
+            }
+            if ($repository=~m!/\Q$toptwo\E/!)
+            {
+              $repositoryroot="$`/$toptwo";
+            }
+            else
+            {
+              if ($repository=~m!/\Q$componentleaf\E/!)
+              {
+                $repositoryroot="$`/$componentleaf";
+              }
             }
           }
+          $repository =~ s!^\Q$repositoryroot\E/!!;
         }
-        $repository=~s!^$repositoryroot/!!;
+        else
+        { # No ,v on the end; which means that the file couldn't be found.
+          # Usually that's bad, but for 'add's it is normal as it uses
+          # the term 'No revision control file'. This means that we lose
+          # the full path that's being added.
+          $repository = $file; # Not fully qualified :-(
+          # print "$_\n";
+        }
         if ($note ne "")
         {
-          $safefile = q{$file};
-          $repository=~s!/Attic/$safefile$!/$safefile!;
-          $repository=~s!^Attic/$safefile$!$safefile!;
+          $repository =~ s!/Attic/([^/]+)$!/$1!;
+          $repository =~ s!^Attic/([^/]+)$!$1!;
           if ($note eq "added")
           { $f_added.="\n$repository"; }
           elsif ($note eq "removed")
@@ -257,7 +271,7 @@ else
           $note="";
         }
       }
-      elsif (/^File: (.*?)\s*Status: (.*?)\n/)
+      elsif (/^File: (.*?)\s*Status: (.*?)$/)
       {
         $file=$1;
         $state=$2;
