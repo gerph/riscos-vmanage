@@ -1,0 +1,479 @@
+#!/usr/bin/env perl
+##
+# ROCommit - RISC OS Commit tool.
+#
+# This re-write of the tool is intended to replace the original commit tool (2000-2006), which was
+# itself a reimplementation of the Acorn 'srccommit' tool.
+#
+# This time, we're just dealing with VersionNum file manipulation.
+#
+#
+# VersionNum files look like this:
+#   /* Ping (1.04) 16:05:42 9/10/2006
+#    *
+#    * This file is automatically maintained by commit, do not edit manually.
+#    *
+#    */
+#   #define Module_MajorVersion_CMHG        1.04
+#   #define Module_MinorVersion_CMHG        
+#   #define Module_Date_CMHG                09 Oct 2006
+#
+#   #define Module_MajorVersion             "1.04"
+#   #define Module_Version                  104
+#   #define Module_MinorVersion             ""
+#   #define Module_Date                     "09 Oct 2006"
+#
+#   #define Module_ApplicationDate2         "09-Oct-06"
+#   #define Module_ApplicationDate4         "09-Oct-2006"
+#
+#   #define Module_ComponentName            "Ping"
+#   #define Module_ComponentBranch          ""
+#   #define Module_ComponentPath            "Sources/Networking/Ping"
+#
+#   #define Module_FullVersion              "1.04"
+#   #define Module_FullVersionAndDate       "1.04 (09 Oct 2006)"
+#   #define Module_HelpVersion              "1.04 (09 Oct 2006)"
+#
+
+use warnings;
+use strict;
+
+my $managed_message = 'This file is automatically maintained by rocommit, do not edit manually.';
+
+# set up OS-type
+my $riscos;
+my $dirsep;
+my $versionbas;
+if (($^O eq "") ||
+    ($^O =~ /riscos/i))
+{ $riscos=1; $dirsep="."; $versionbas="VersionBas"; }
+else
+{ $riscos=0; $dirsep="/"; $versionbas="VersionBas,ffb"; }
+
+my $directory = `pwd`;
+$directory =~ tr!./!/.! if ($riscos); # swap paths
+$directory =~ s/[\n\r]//g; # remove trailing nl or cr (probably RO only)
+
+my %version_infer = (
+        'MajorVersion_CMHG'     => sub { my ($v) = @_; return $v->{'MajorVersion'} },
+        'MinorVersion_CMHG'     => sub { my ($v) = @_; return $v->{'MinorVersion'} },
+        'Date_CMHG'             => sub { my ($v) = @_; return $v->{'Date'} },
+        'ApplicationDate2'      => sub { my ($v) = @_;
+                                         my $x = $v->{'Date'};
+                                         $x =~ s/ /-/g;
+                                         $x =~ s/-(19|20)/-/g;
+                                         return $x;
+                                   },
+        'ApplicationDate4'      => sub { my ($v) = @_;
+                                         my $x = $v->{'Date'};
+                                         $x =~ s/ /-/g;
+                                         return $x;
+                                   },
+        'Version'               => sub { my ($v) = @_; return int($v->{'MajorVersion'} * 100 + 0.49); },
+        'FullVersion'           => sub { my ($v) = @_;
+                                         my $x = $v->{'MajorVersion'};
+                                         if ($v->{'MinorVersion'}) {
+                                             $x .= " $v->{'MinorVersion'}";
+                                         }
+                                         return $x;
+                                   },
+        'FullVersionAndDate'    => sub { my ($v) = @_;
+                                         my $x = "$v->{'MajorVersion'} ($v->{'Date'})";
+                                         if ($v->{'MinorVersion'}) {
+                                             $x .= " $v->{'MinorVersion'}";
+                                         }
+                                         return $x;
+                                   },
+        'HelpVersion'           => sub { my ($v) = @_;
+                                         my $x = "$v->{'MajorVersion'} ($v->{'Date'})";
+                                         if ($v->{'MinorVersion'}) {
+                                             $x .= " $v->{'MinorVersion'}"
+                                         }
+                                         return $x;
+                                   },
+   );
+
+
+##
+# Create a new version structure, containing the details from the VersionNum file.
+sub version_new
+{
+    my ($filename) = @_;
+    my $v = {
+            'filename' => $filename,
+            'writetime' => undef,
+
+            # Inferred keys
+            'MajorVersion_CMHG' => undef,
+            'MinorVersion_CMHG' => undef,
+            'Date_CMHG' => undef,
+            'ApplicationDate2' => undef,
+            'ApplicationDate4' => undef,
+            'Version' => undef,
+            'FullVersion' => undef,
+            'FullVersionAndDate' => undef,
+            'HelpVersion' => undef,
+
+            # Canonical keys
+            'MajorVersion' => undef,
+            'MinorVersion' => '',
+            'Date' => undef,
+            'ComponentName' => '?',
+            'ComponentBranch' => '', # This should never be set
+            'ComponentPath' => '',
+        };
+
+    # Try to guess the component name/path from the directory.
+    if ($directory =~ /(Sources.*)/)
+    {
+        $v->{'ComponentPath'} = $1;
+    }
+    if ($directory =~ /\/([^\/]+)$/)
+    {
+        $v->{'ComponentName'} = $1;
+        if (!$v->{'ComponentPath'})
+        {
+            $v->{'ComponentPath'} = $1;
+        }
+    }
+
+    if (defined $filename)
+    {
+        open(my $fh, '<', $filename) || die "Cannot read VersioNum file '$filename': $!";
+        while (my $line = <$fh>)
+        {
+            chomp($line);
+            if ($line =~ /#define Module_(.*?) +(.*)$/)
+            {
+                my ($name, $value) = ($1, $2);
+                if ($value =~ /^"(.*)"/)
+                {
+                    $value = $1;
+                }
+                if (exists $v->{$name})
+                {
+                    $v->{$name} = $value;
+                }
+            }
+        }
+        close($fh);
+    }
+
+    return $v;
+}
+
+
+##
+# Increment the version number
+sub version_increment
+{
+    my ($v, $major) = @_;
+    my ($high, $low) = split /\./, $v->{'MajorVersion'};
+    if ($major)
+    {
+        $high += 1;
+        $low = 0;
+    }
+    else
+    {
+        $low += 1;
+        if ($low >= 100)
+        {
+            $high += 1;
+            $low = 0;
+        }
+    }
+    $v->{'MajorVersion'} = sprintf '%i.%02i', $high, $low;
+}
+
+
+##
+# Update all the inferred fields from the canonical ones
+sub version_infer
+{
+    my ($v) = @_;
+    for my $key (keys %version_infer)
+    {
+        my $sub = $version_infer{$key};
+        $v->{$key} = & $sub ($v);
+    }
+}
+
+
+##
+# Update with the new date
+sub version_update
+{
+    my ($v) = @_;
+    my ($sec,$min,$hour,$mday,$mon,$year,$wday,$yday,$isdst) = localtime(time);
+    my $writetime = sprintf("%02d:%02d:%02d $mday/%d/".($year+1900), $hour, $min,
+                            $sec,$mon+1);
+    if ($mday<10)
+    { $mday="0".($mday+0); }
+    else
+    { $mday=$mday+0; }
+    $year=$year+1900;
+    if ($mon==0) { $mon="Jan"; }
+    elsif ($mon==1) { $mon="Feb"; }
+    elsif ($mon==2) { $mon="Mar"; }
+    elsif ($mon==3) { $mon="Apr"; }
+    elsif ($mon==4) { $mon="May"; }
+    elsif ($mon==5) { $mon="Jun"; }
+    elsif ($mon==6) { $mon="Jul"; }
+    elsif ($mon==7) { $mon="Aug"; }
+    elsif ($mon==8) { $mon="Sep"; }
+    elsif ($mon==9) { $mon="Oct"; }
+    elsif ($mon==10) { $mon="Nov"; }
+    elsif ($mon==11) { $mon="Dec"; }
+    my $date = "$mday $mon $year";
+
+    $v->{'writetime'} = $writetime;
+    $v->{'Date'} = $date;
+}
+
+
+##
+# Write out the files, based on those that already exist.
+sub version_write
+{
+    my ($v, $filename) = @_;
+    version_update($v);
+    version_infer($v);
+
+    version_write_versionnum($v, $filename);
+    version_write_versionasm($v, $filename);
+    version_write_versionbas($v, $filename);
+}
+
+
+##
+# Write a VersionNum file
+sub version_write_versionnum
+{
+    my ($v, $filename) = @_;
+    if (!defined $filename)
+    {
+        $filename = $v->{'filename'};
+    }
+
+    open(my $fh, '>', $filename) || die "Cannot write '$filename': $!";
+    print $fh <<EOM;
+/* $v->{'ComponentName'} ($v->{'MajorVersion'}) $v->{'writetime'}
+ *
+ * $managed_message
+ *
+ */
+#define Module_MajorVersion_CMHG        $v->{'MajorVersion_CMHG'}
+#define Module_MinorVersion_CMHG        $v->{'MinorVersion_CMHG'}
+#define Module_Date_CMHG                $v->{'Date_CMHG'}
+
+#define Module_MajorVersion             "$v->{'MajorVersion'}"
+#define Module_Version                  $v->{'Version'}
+#define Module_MinorVersion             "$v->{'MinorVersion'}"
+#define Module_Date                     "$v->{'Date'}"
+
+#define Module_ApplicationDate2         "$v->{'ApplicationDate2'}"
+#define Module_ApplicationDate4         "$v->{'ApplicationDate4'}"
+
+#define Module_ComponentName            "$v->{'ComponentName'}"
+#define Module_ComponentBranch          "$v->{'ComponentBranch'}"
+#define Module_ComponentPath            "$v->{'ComponentPath'}"
+
+#define Module_FullVersion              "$v->{'FullVersion'}"
+#define Module_FullVersionAndDate       "$v->{'FullVersionAndDate'}"
+#define Module_HelpVersion              "$v->{'HelpVersion'}"
+EOM
+  close($fh);
+}
+
+
+##
+# Write a VersionAsm file
+sub version_write_versionasm
+{
+    my ($v, $filename) = @_;
+    if (!defined $filename)
+    {
+        $filename = $v->{'filename'};
+    }
+    $filename =~ s/(^|\/)[^\/]+$/$1VersionAsm/;
+    if (!-f $filename)
+    {
+        # No file present, so we won't write a new one
+        return;
+    }
+
+    open(my $fh, '>', $filename) || die "Cannot write '$filename': $!";
+    print $fh <<EOM;
+; $v->{'ComponentName'} ($v->{'Version'})
+;
+; $managed_message
+;
+
+                          GBLS   Module_MajorVersion
+                          GBLS   Module_MinorVersion
+                          GBLA   Module_Version
+                          GBLS   Module_Date
+                          GBLS   Module_FullVersion
+                          GBLS   Module_FullVersionAndDate
+                          GBLS   Module_ComponentName
+                          GBLS   Module_ComponentBranch
+                          GBLS   Module_ComponentPath
+Module_MajorVersion       SETS   "$v->{'MajorVersion'}"
+Module_MinorVersion       SETS   "$v->{'MinorVersion'}"
+Module_Version            SETA   $v->{'Version'}
+Module_Date               SETS   "$v->{'Date'}"
+Module_FullVersion        SETS   "$v->{'FullVersion'}"
+Module_FullVersionAndDate SETS   "$v->{'FullVersionAndDate'}"
+Module_ComponentName      SETS   "$v->{'ComponentName'}"
+Module_ComponentBranch    SETS   "$v->{'ComponentBranch'}"
+Module_ComponentPath      SETS   "$v->{'ComponentPath'}"
+
+                          END
+EOM
+    close($fh);
+}
+
+
+##
+# Write a VersionBas file
+sub version_write_versionbas
+{
+    my ($v, $filename) = @_;
+    if (!defined $filename)
+    {
+        $filename = $v->{'filename'};
+    }
+    $filename =~ s/(^|\/)[^\/]+$/$1$versionbas/;
+    if (!-f $filename)
+    {
+        # No file present, so we won't write a new one
+        return;
+    }
+
+    my $basic = <<EOM;
+
+REM >VersionBas
+REM $v->{'ComponentName'} ($v->{'MajorVersion'})
+REM $managed_message
+DEFPROCinit_version
+version_major\$="$v->{'MajorVersion'}"
+version_minor\$="$v->{'MinorVersion'}"
+version_number\%=$v->{'Version'}
+version_date\$="$v->{'Date'}"
+version_componentname\$="$v->{'ComponentName'}"
+version_componentbranch\$="$v->{'ComponentBranch'}"
+version_componentpath\$="$v->{'ComponentPath'}"
+version_full\$="$v->{'FullVersion'}"
+version_fullanddate\$="$v->{'FullVersionAndDate'}"
+ENDPROC
+EOM
+    $basic=~s/\nREM/\n\xf4/mg;
+    $basic=~s/\nDEFPROC/\n\xdd\xf2/mg;
+    $basic=~s/\nENDPROC/\n\xe1/mg;
+
+    my $acc="";
+    while ($basic=~s/^\n(.*?)\n/\n/)
+    {
+      $acc.="\r\x00\x01".pack("c",4+length($1))."$1";
+    }
+    $acc.="\r\xff";
+
+    open(my $fh, '>', $filename) || die "Cannot write '$filename': $!";
+    print $fh $acc;
+    close($fh);
+}
+
+
+##
+# Syntax message
+sub syntax
+{
+    print <<EOM;
+rocommit (c) Justin Fletcher
+Updates VersionNum files in line with RISC OS conventions
+Syntax: rocommit init
+        rocommit increment|inc
+EOM
+}
+
+##
+# Show Help message
+sub help
+{
+    print <<EOM;
+Maintained files
+----------------
+
+VersionNum   : An C-style include file, for use with C, C++, CMHG, and
+               other C-style sources. The utility VTranslate will take
+               parameters from this file and allow them to be replaced
+               in plain text files or BASIC programs.
+VersionAsm   : Assembler version of the VersionNum file, using the same
+               names.
+VersionBas   : A BASIC library, providing PROCinit_version and similarly
+               (but not identically) named variables to VersionNum.
+
+Note: VersionLog is not supported.
+
+
+Version numbers
+---------------
+
+Version numbers are always of the form <major>.<minor>, where <major> is
+a single decimal digit, and <minor> is a pair of decimal digits. In the
+normal course of things you would start this version number at 0.00 and
+leave the number to increment automatically.
+
+If you wish to arbitrarily increase the version number you should modify
+Module_MajorVersion in the VersionNum file. This is NOT recommended
+and may be allowed from the command line at some later date.
+EOM
+    exit(0);
+}
+
+############################################################################
+## Main code
+
+
+my $filename = 'VersionNum';
+my $op = undef;
+while (my $arg = shift)
+{
+    if (!defined $op)
+    {
+        $op = $arg;
+    }
+}
+
+if (!defined $op || $op eq 'help')
+{
+    syntax();
+    print "\n";
+    help();
+}
+
+$filename = undef if (!-f $filename);
+my $v = version_new($filename);
+if ($op eq 'init')
+{
+    $v->{'MajorVersion'} = '0.00';
+    version_write($v, 'VersionNum');
+}
+else
+{
+    if (!$filename)
+    {
+        die "No VersionNum file exists; use '$0 init' to initialise";
+    }
+
+    if ($op eq 'inc' || $op eq 'increment')
+    {
+        version_increment($v);
+        version_write($v);
+    }
+    else
+    {
+        die "Unrecognised operation '$op'\n";
+    }
+}
