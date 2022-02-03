@@ -1,4 +1,4 @@
-# Commit script for VersionNum management script
+# Script for VersionNum management
 
 ## Summary
 
