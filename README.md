@@ -1,38 +1,89 @@
-# Commit script for sour
+# Commit script for VersionNum management script
 
-## Quick intro
+## Summary
 
-The 'rocommit' script is intended to be used with CVS components in order to
-maintain a standardised task-based version numbering system. This script has
-been used successfully on both RISC OS and Unix, but it is on Unix that the
-script is used by myself. More information about the use of the tool can
-be found with 'commit -help'.
+The `vmanage` script is intended to be used with RISC OS sources in order to
+maintain a standardised task-based version numbering system. This script is
+intended to be used on RISC OS and POSIX-like systems, but has only been
+tested on OSX.
+
+More information about the use of the tool can be found with `vmanage -help`.
 
 
 ## Example usage
 
-Create a new component:
-  prompt> cd ComponentDirectory
-  prompt> commit -new -name <component-name-without-spaces>
-  Initial version number ? <enter the initial version number, usually 0.00>
-  <the VersionNum file will be added and committed to the repository; you
-  must commit all the other files after adding them>
+Initialise the VersionNum file with a default version number:
 
-Adding files to the component:
-  prompt> cvs add <files>
-  <ie same as usual CVS>
+    prompt> cd ComponentDirectory
+    prompt> vmanage init
+    <the VersionNum file will be created with the version 0.00>
 
-Commit changes to the component:
-  prompt> commit
-  <editor opens prompting you to enter your change information on exit the
-  text will be used for all files>
+Initialise the VersionNum file with a specific version number:
 
-Commit a minor correction which shouldn't update the version number:
-  prompt> commit -noupdate
-  <editor opens prompting you to enter your change information on exit the
-  text will be used for all files>
+    prompt> cd ComponentDirectory
+    prompt> vmanage init -version <x.yy>
+    <the VersionNum files will be created with the specified version>
 
-Check what versions are present on a component:
-  prompt> cvs log VersionNum
-  <lists the log for VersionNum, which will have been updated for every
-  change to the component>
+Increment the VersionNum file:
+
+    prompt> cd ComponentDirectory
+    prompt> vmanage inc
+    <the VersionNum files will have their version incremented and dates updated>
+
+Set the version in the VersionNum file to a specific value:
+
+    prompt> cd ComponentDirectory
+    prompt> vmanage set <x.yy>
+    <the VersionNum files will have their version set and dates updated>
+
+Update the date stamp in the VersionNum file:
+
+    prompt> cd ComponentDirectory
+    prompt> vmanage update
+    <the VersionNum files will all be updated with the current date and version>
+
+Create a VersionBas BASIC file containing the same details:
+
+    prompt> cd ComponentDirectory
+    prompt> touch VersionBas,ffb
+    prompt> vmanage update
+    <the VersionBas file is created and will be updated each time the version is changed>
+
+Create a VersionAsm assembler header containing the same details:
+
+    prompt> cd ComponentDirectory
+    prompt> touch VersionAsm
+    prompt> vmanage update
+    <the VersionAsm file is created and will be updated each time the version is changed>
+
+
+## Use with CMHG/CMunge
+
+The CMHG and CMunge tools have the ability to preprocess their content. This
+allows the header to include the `VersionNum` files and use its values. To make
+the tools apply the pre-processor, specify the `-p` option on their command line.
+
+A simple command invocation might look like this:
+
+    cmhg -p -o o.mymodule cmhg.mymodule
+
+In a Makefile this might look like this:
+
+    CMHGflags = -depend !Depend -throwback -p
+
+    .cmhg.o:;    cmhg $(cmhgflags) -o $@ $<
+
+The CMHG file itself would contain an include and help-string definition thus:
+
+    #include "VersionNum"
+
+    help-string:  OmniDisc Module_MajorVersion_CMHG Module_MinorVersion_CMHG
+
+In a C file you might include the version string in your help message, something like this:
+
+    #include "VersionNum"
+
+    void print_version(void)
+    {
+        printf("MyTool " Module_FullVersionAndDate " (C) Future Gadget Labs\n");
+    }

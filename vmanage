@@ -1,9 +1,11 @@
 #!/usr/bin/env perl
 ##
-# ROCommit - RISC OS Commit tool.
+# VManage - RISC OS VersionNum management tool.
 #
-# This re-write of the tool is intended to replace the original commit tool (2000-2006), which was
+# This re-write of the tool is intended to replace my original commit tool (2000-2006), which was
 # itself a reimplementation of the Acorn 'srccommit' tool.
+#
+# Original commit tool can be found in source control, and at https://usenet.gerph.org/Commit/
 #
 # This time, we're just dealing with VersionNum file manipulation.
 #
@@ -39,8 +41,8 @@
 use warnings;
 use strict;
 
-my $toolname = 'rocommit';
-my $managed_message = 'This file is automatically maintained by $toolname, do not edit manually.';
+my $toolname = 'vmanage';
+my $managed_message = "This file is automatically maintained by $toolname, do not edit manually.";
 
 # set up OS-type
 my $riscos;
@@ -417,6 +419,7 @@ Updates VersionNum files in line with RISC OS conventions.
 
 Syntax: $toolname init [-version <x.yy>]
         $toolname increment|inc
+        $toolname update
         $toolname set [-version <x.yy>|<x.yy>]
 EOM
 }
@@ -505,6 +508,11 @@ else
     if ($op eq 'inc' || $op eq 'increment')
     {
         version_increment($v);
+        version_write($v);
+        print "Version number now $v->{'MajorVersion'}\n";
+    }
+    elsif ($op eq 'update')
+    {
         version_write($v);
         print "Version number now $v->{'MajorVersion'}\n";
     }
