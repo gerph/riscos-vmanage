@@ -9,6 +9,7 @@
 #
 #
 # VersionNum files look like this:
+#
 #   /* Ping (1.04) 16:05:42 9/10/2006
 #    *
 #    * This file is automatically maintained by commit, do not edit manually.
@@ -38,7 +39,8 @@
 use warnings;
 use strict;
 
-my $managed_message = 'This file is automatically maintained by rocommit, do not edit manually.';
+my $toolname = 'rocommit';
+my $managed_message = 'This file is automatically maintained by $toolname, do not edit manually.';
 
 # set up OS-type
 my $riscos;
@@ -182,6 +184,26 @@ sub version_increment
             $high += 1;
             $low = 0;
         }
+    }
+    $v->{'MajorVersion'} = sprintf '%i.%02i', $high, $low;
+}
+
+
+##
+# Set the version number
+sub version_set
+{
+    my ($v, $version) = @_;
+    my ($high, $low) = split /\./, $version;
+    if (!defined $low)
+    {
+        $low = $high % 100;
+        $high = $high / 100;
+    }
+    if ($low > 99)
+    {
+        $high += $low / 100;
+        $low = $low % 100;
     }
     $v->{'MajorVersion'} = sprintf '%i.%02i', $high, $low;
 }
@@ -390,10 +412,12 @@ EOM
 sub syntax
 {
     print <<EOM;
-rocommit (c) Justin Fletcher
-Updates VersionNum files in line with RISC OS conventions
-Syntax: rocommit init
-        rocommit increment|inc
+$toolname (c) Gerph
+Updates VersionNum files in line with RISC OS conventions.
+
+Syntax: $toolname init [-version <x.yy>]
+        $toolname increment|inc
+        $toolname set [-version <x.yy>|<x.yy>]
 EOM
 }
 
@@ -410,9 +434,10 @@ VersionNum   : An C-style include file, for use with C, C++, CMHG, and
                parameters from this file and allow them to be replaced
                in plain text files or BASIC programs.
 VersionAsm   : Assembler version of the VersionNum file, using the same
-               names.
+               names. Only updated if it exists.
 VersionBas   : A BASIC library, providing PROCinit_version and similarly
                (but not identically) named variables to VersionNum.
+               Only updated if it exists.
 
 Note: VersionLog is not supported.
 
@@ -438,11 +463,21 @@ EOM
 
 my $filename = 'VersionNum';
 my $op = undef;
+my $version = undef;
 while (my $arg = shift)
 {
     if (!defined $op)
     {
         $op = $arg;
+    }
+    elsif ($op eq '--version')
+    {
+        $version = shift || '0.00';
+    }
+    else
+    {
+        unshift @ARGV, $arg;
+        last;
     }
 }
 
@@ -457,7 +492,7 @@ $filename = undef if (!-f $filename);
 my $v = version_new($filename);
 if ($op eq 'init')
 {
-    $v->{'MajorVersion'} = '0.00';
+    $v->{'MajorVersion'} = $version || '0.00';
     version_write($v, 'VersionNum');
 }
 else
@@ -471,6 +506,21 @@ else
     {
         version_increment($v);
         version_write($v);
+        print "Version number now $v->{'MajorVersion'}\n";
+    }
+    elsif ($op eq 'set')
+    {
+        if (!defined $version)
+        {
+            $version = shift;
+        }
+        if (!defined $version)
+        {
+            die "Syntax: $0 set <x.yy>\n";
+        }
+        version_set($v, $version);
+        version_write($v);
+        print "Version number now $v->{'MajorVersion'}\n";
     }
     else
     {

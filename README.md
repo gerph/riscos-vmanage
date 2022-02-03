@@ -1,8 +1,8 @@
-# Commit script for CVS
+# Commit script for sour
 
 ## Quick intro
 
-The 'commit' script is intended to be used with CVS components in order to
+The 'rocommit' script is intended to be used with CVS components in order to
 maintain a standardised task-based version numbering system. This script has
 been used successfully on both RISC OS and Unix, but it is on Unix that the
 script is used by myself. More information about the use of the tool can
