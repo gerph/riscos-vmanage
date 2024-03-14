@@ -428,6 +428,9 @@ EOM
 # Show Help message
 sub help
 {
+    my $create = 'touch';
+    $create = 'Create' if ($riscos);
+
     print <<EOM;
 Maintained files
 ----------------
@@ -453,9 +456,30 @@ a single decimal digit, and <minor> is a pair of decimal digits. In the
 normal course of things you would start this version number at 0.00 and
 leave the number to increment automatically.
 
-If you wish to arbitrarily increase the version number you should modify
-Module_MajorVersion in the VersionNum file. This is NOT recommended
-and may be allowed from the command line at some later date.
+
+Usage
+-----
+When starting a project, initialise the version number file:
+
+    vmanage init
+
+When you add a feature to the project:
+
+    vmanage inc
+
+If you need to change the version number arbitrarily:
+
+    vmanage set <new version>
+
+If you need to add an assembler file to your project:
+
+    $create VersionAsm
+    vmanage update
+
+If you need a BASIC file in your project:
+
+    $create $versionbas
+    vmanage update
 EOM
     exit(0);
 }
@@ -469,13 +493,17 @@ my $op = undef;
 my $version = undef;
 while (my $arg = shift)
 {
-    if (!defined $op)
+    if (!defined $op && $arg !~ /^-/)
     {
         $op = $arg;
     }
-    elsif ($op eq '--version')
+    elsif ($arg eq '--version' || $arg eq '-version')
     {
         $version = shift || '0.00';
+    }
+    elsif ($arg =~ /^--?h(elp)?/)
+    {
+        $op = 'help';
     }
     else
     {
@@ -495,7 +523,7 @@ $filename = undef if (!-f $filename);
 my $v = version_new($filename);
 if ($op eq 'init')
 {
-    $v->{'MajorVersion'} = $version || '0.00';
+    version_set($v, $version || '0.00');
     version_write($v, 'VersionNum');
 }
 else
