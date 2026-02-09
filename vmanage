@@ -58,38 +58,93 @@ my $directory = `pwd`;
 $directory =~ tr!./!/.! if ($riscos); # swap paths
 $directory =~ s/[\n\r]//g; # remove trailing nl or cr (probably RO only)
 
+##
+# Internal function to read parameters, with defaults.
+sub _version_get
+{
+    my ($v, $default, @keys) = @_;
+    my $k;
+    for $k (@keys)
+    {
+        if (defined $v->{$k})
+        {
+            return $v->{$k};
+        }
+    }
+    return $default;
+}
+
+##
+# Get the current date
+sub date_now
+{
+    my ($sec,$min,$hour,$mday,$mon,$year,$wday,$yday,$isdst) = localtime(time);
+    if ($mday<10)
+    { $mday="0".($mday+0); }
+    else
+    { $mday=$mday+0; }
+    $year=$year+1900;
+    if ($mon==0) { $mon="Jan"; }
+    elsif ($mon==1) { $mon="Feb"; }
+    elsif ($mon==2) { $mon="Mar"; }
+    elsif ($mon==3) { $mon="Apr"; }
+    elsif ($mon==4) { $mon="May"; }
+    elsif ($mon==5) { $mon="Jun"; }
+    elsif ($mon==6) { $mon="Jul"; }
+    elsif ($mon==7) { $mon="Aug"; }
+    elsif ($mon==8) { $mon="Sep"; }
+    elsif ($mon==9) { $mon="Oct"; }
+    elsif ($mon==10) { $mon="Nov"; }
+    elsif ($mon==11) { $mon="Dec"; }
+    my $date = "$mday $mon $year";
+    return $date;
+}
+
 my %version_infer = (
-        'MajorVersion_CMHG'     => sub { my ($v) = @_; return $v->{'MajorVersion'} },
-        'MinorVersion_CMHG'     => sub { my ($v) = @_; return $v->{'MinorVersion'} },
-        'Date_CMHG'             => sub { my ($v) = @_; return $v->{'Date'} },
+        'MajorVersion_CMHG'     => sub { my ($v) = @_;
+                                         return _version_get($v, '0.00', 'MajorVersion', 'MajorVersion_CMHG'); },
+        'MinorVersion_CMHG'     => sub { my ($v) = @_;
+                                         return _version_get($v, '', 'MinorVersion', 'MinorVersion_CMHG'); },
+        'MajorVersion'          => sub { my ($v) = @_;
+                                         return _version_get($v, '0.00', 'MajorVersion', 'MajorVersion_CMHG'); },
+        'MinorVersion'          => sub { my ($v) = @_;
+                                         return _version_get($v, '', 'MinorVersion', 'MinorVersion_CMHG'); },
+        'Date_CMHG'             => sub { my ($v) = @_;
+                                         return _version_get($v, date_now(), 'Date', 'Date_CMHG'); },
+        'Date_CMHG'             => sub { my ($v) = @_;
+                                         return _version_get($v, date_now(), 'Date', 'Date_CMHG'); },
         'ApplicationDate2'      => sub { my ($v) = @_;
-                                         my $x = $v->{'Date'};
+                                         my $x = _version_get($v, date_now(), 'Date', 'Date_CMHG');
                                          $x =~ s/ /-/g;
                                          $x =~ s/-(19|20)/-/g;
                                          return $x;
                                    },
         'ApplicationDate4'      => sub { my ($v) = @_;
-                                         my $x = $v->{'Date'};
+                                         my $x = _version_get($v, date_now(), 'Date', 'Date_CMHG');
                                          $x =~ s/ /-/g;
                                          return $x;
                                    },
-        'Version'               => sub { my ($v) = @_; return int($v->{'MajorVersion'} * 100 + 0.49); },
+        'Version'               => sub { my ($v) = @_;
+                                         my $x = _version_get($v, '0.00', 'MajorVersion', 'MajorVersion_CMHG');
+                                         return int($x * 100 + 0.49); },
         'FullVersion'           => sub { my ($v) = @_;
-                                         my $x = $v->{'MajorVersion'};
+                                         my $x = _version_get($v, '', 'MajorVersion', 'MajorVersion_CMHG');
                                          if ($v->{'MinorVersion'}) {
                                              $x .= " $v->{'MinorVersion'}";
                                          }
                                          return $x;
                                    },
         'FullVersionAndDate'    => sub { my ($v) = @_;
-                                         my $x = "$v->{'MajorVersion'} ($v->{'Date'})";
+                                         my $x = _version_get($v, '', 'MajorVersion', 'MajorVersion_CMHG');
+                                         $x = "$x ($v->{'Date'})";
                                          if ($v->{'MinorVersion'}) {
                                              $x .= " $v->{'MinorVersion'}";
                                          }
                                          return $x;
                                    },
         'HelpVersion'           => sub { my ($v) = @_;
-                                         my $x = "$v->{'MajorVersion'} ($v->{'Date'})";
+                                         my $x = _version_get($v, '', 'MajorVersion', 'MajorVersion_CMHG');
+                                         $x = "$x ($v->{'Date'})";
                                          if ($v->{'MinorVersion'}) {
                                              $x .= " $v->{'MinorVersion'}"
                                          }
@@ -152,6 +207,7 @@ sub version_new
                 my ($name, $value) = ($1, $2);
                 if ($value =~ /^"(.*)"/)
                 {
+                    # Remove the quotes if they were present
                     $value = $1;
                 }
                 if (exists $v->{$name})
@@ -232,24 +288,7 @@ sub version_update
     my ($sec,$min,$hour,$mday,$mon,$year,$wday,$yday,$isdst) = localtime(time);
     my $writetime = sprintf("%02d:%02d:%02d $mday/%d/".($year+1900), $hour, $min,
                             $sec,$mon+1);
-    if ($mday<10)
-    { $mday="0".($mday+0); }
-    else
-    { $mday=$mday+0; }
-    $year=$year+1900;
-    if ($mon==0) { $mon="Jan"; }
-    elsif ($mon==1) { $mon="Feb"; }
-    elsif ($mon==2) { $mon="Mar"; }
-    elsif ($mon==3) { $mon="Apr"; }
-    elsif ($mon==4) { $mon="May"; }
-    elsif ($mon==5) { $mon="Jun"; }
-    elsif ($mon==6) { $mon="Jul"; }
-    elsif ($mon==7) { $mon="Aug"; }
-    elsif ($mon==8) { $mon="Sep"; }
-    elsif ($mon==9) { $mon="Oct"; }
-    elsif ($mon==10) { $mon="Nov"; }
-    elsif ($mon==11) { $mon="Dec"; }
-    my $date = "$mday $mon $year";
+    my $date = date_now();
 
     $v->{'writetime'} = $writetime;
     $v->{'Date'} = $date;
