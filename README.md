@@ -56,6 +56,13 @@ Create a VersionAsm assembler header containing the same details:
     prompt> vmanage update
     <the VersionAsm file is created and will be updated each time the version is changed>
 
+Create a VersionFortran Fortran file containing the same details:
+
+    prompt> cd ComponentDirectory
+    prompt> touch VersionFortran
+    prompt> vmanage update
+    <the VersionFortran file is created and will be updated each time the version is changed>
+
 
 ## Use with CMHG/CMunge
 

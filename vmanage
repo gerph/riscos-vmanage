@@ -306,6 +306,7 @@ sub version_write
     version_write_versionnum($v, $filename);
     version_write_versionasm($v, $filename);
     version_write_versionbas($v, $filename);
+    version_write_versionfortran($v, $filename);
 }
 
 
@@ -449,6 +450,49 @@ EOM
 
 
 ##
+# Write a VersionFortran file
+sub version_write_versionfortran
+{
+    my ($v, $filename) = @_;
+    if (!defined $filename)
+    {
+        $filename = $v->{'filename'};
+    }
+    $filename =~ s/(^|\/)[^\/]+$/$1VersionFortran/;
+    if (!-f $filename)
+    {
+        # No file present, so we won't write a new one
+        return;
+    }
+
+    open(my $fh, '>', $filename) || die "Cannot write '$filename': $!";
+    print $fh <<EOM;
+! $v->{'ComponentName'} ($v->{'MajorVersion'}) $v->{'Date'}
+!
+! $managed_message
+!
+
+character(len=*), parameter :: Module_MajorVersion = "$v->{'MajorVersion'}"
+integer, parameter :: Module_Version = $v->{'Version'}
+character(len=*), parameter :: Module_MinorVersion = "$v->{'MinorVersion'}"
+character(len=*), parameter :: Module_Date = "$v->{'Date'}"
+
+character(len=*), parameter :: Module_ApplicationDate2 = "$v->{'ApplicationDate2'}"
+character(len=*), parameter :: Module_ApplicationDate4 = "$v->{'ApplicationDate4'}"
+
+character(len=*), parameter :: Module_ComponentName = "$v->{'ComponentName'}"
+character(len=*), parameter :: Module_ComponentBranch = "$v->{'ComponentBranch'}"
+character(len=*), parameter :: Module_ComponentPath = "$v->{'ComponentPath'}"
+
+character(len=*), parameter :: Module_FullVersion = "$v->{'FullVersion'}"
+character(len=*), parameter :: Module_FullVersionAndDate = "$v->{'FullVersionAndDate'}"
+character(len=*), parameter :: Module_HelpVersion = "$v->{'HelpVersion'}"
+EOM
+    close($fh);
+}
+
+
+##
 # Syntax message
 sub syntax
 {
@@ -482,6 +526,8 @@ VersionAsm   : Assembler version of the VersionNum file, using the same
                names. Only updated if it exists.
 VersionBas   : A BASIC library, providing PROCinit_version and similarly
                (but not identically) named variables to VersionNum.
+               Only updated if it exists.
+VersionFortran: Fortran version of the VersionNum file.
                Only updated if it exists.
 
 Note: VersionLog is not supported.
@@ -518,6 +564,11 @@ If you need to add an assembler file to your project:
 If you need a BASIC file in your project:
 
     $create $versionbas
+    vmanage update
+
+If you need a Fortran file in your project:
+
+    $create VersionFortran
     vmanage update
 EOM
     exit(0);
