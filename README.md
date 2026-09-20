@@ -63,6 +63,20 @@ Create a VersionFortran Fortran file containing the same details:
     prompt> vmanage update
     <the VersionFortran file is created and will be updated each time the version is changed>
 
+Create a VersionD D file, or a VersionRust Rust file, containing the same
+details:
+
+    prompt> cd ComponentDirectory
+    prompt> touch VersionD
+    prompt> touch VersionRust
+    prompt> vmanage update
+    <each file is created and will be updated each time the version is changed>
+
+Neither language has a C preprocessor to include VersionNum with, so these
+files are brought into the source at compile time instead: in D with
+`mixin(import("VersionD"));` (the compiler needs `-J.` so the string import
+can find the file), and in Rust with `include!("VersionRust");`.
+
 
 ## Use with CMHG/CMunge
 

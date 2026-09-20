@@ -307,6 +307,8 @@ sub version_write
     version_write_versionasm($v, $filename);
     version_write_versionbas($v, $filename);
     version_write_versionfortran($v, $filename);
+    version_write_versiond($v, $filename);
+    version_write_versionrust($v, $filename);
 }
 
 
@@ -493,6 +495,119 @@ EOM
 
 
 ##
+# Write a VersionD file
+#
+# D has no C preprocessor pass over arbitrary headers, so VersionNum's
+# #define macros cannot be included directly the way C/C++ do. This file
+# is spliced into D source at compile time with a string import instead,
+# eg:
+#   mixin(import("VersionD"));
+# which requires the D compiler to be given a string-import search path
+# (`-J.`) that reaches this file - the D equivalent of Fortran's plain
+# `include` statement.
+sub version_write_versiond
+{
+    my ($v, $filename) = @_;
+    if (!defined $filename)
+    {
+        $filename = $v->{'filename'};
+    }
+    $filename =~ s/(^|\/)[^\/]+$/$1VersionD/;
+    if (!-f $filename)
+    {
+        # No file present, so we won't write a new one
+        return;
+    }
+
+    open(my $fh, '>', $filename) || die "Cannot write '$filename': $!";
+    print $fh <<EOM;
+// $v->{'ComponentName'} ($v->{'MajorVersion'}) $v->{'Date'}
+//
+// $managed_message
+//
+
+enum string Module_MajorVersion = "$v->{'MajorVersion'}";
+enum int Module_Version = $v->{'Version'};
+enum string Module_MinorVersion = "$v->{'MinorVersion'}";
+enum string Module_Date = "$v->{'Date'}";
+
+enum string Module_ApplicationDate2 = "$v->{'ApplicationDate2'}";
+enum string Module_ApplicationDate4 = "$v->{'ApplicationDate4'}";
+
+enum string Module_ComponentName = "$v->{'ComponentName'}";
+enum string Module_ComponentBranch = "$v->{'ComponentBranch'}";
+enum string Module_ComponentPath = "$v->{'ComponentPath'}";
+
+enum string Module_FullVersion = "$v->{'FullVersion'}";
+enum string Module_FullVersionAndDate = "$v->{'FullVersionAndDate'}";
+enum string Module_HelpVersion = "$v->{'HelpVersion'}";
+EOM
+    close($fh);
+}
+
+
+##
+# Write a VersionRust file
+#
+# Rust has no C preprocessor pass over arbitrary headers either. Unlike D,
+# Rust's `include!()` splices a file's tokens in verbatim at compile time
+# (no mixin/eval step needed), so a plain:
+#   include!("VersionRust");
+# at the top of the crate root brings these constants in.
+sub version_write_versionrust
+{
+    my ($v, $filename) = @_;
+    if (!defined $filename)
+    {
+        $filename = $v->{'filename'};
+    }
+    $filename =~ s/(^|\/)[^\/]+$/$1VersionRust/;
+    if (!-f $filename)
+    {
+        # No file present, so we won't write a new one
+        return;
+    }
+
+    open(my $fh, '>', $filename) || die "Cannot write '$filename': $!";
+    print $fh <<EOM;
+// $v->{'ComponentName'} ($v->{'MajorVersion'}) $v->{'Date'}
+//
+// $managed_message
+//
+
+#[allow(non_upper_case_globals)]
+pub const Module_MajorVersion: &str = "$v->{'MajorVersion'}";
+#[allow(non_upper_case_globals)]
+pub const Module_Version: i32 = $v->{'Version'};
+#[allow(non_upper_case_globals)]
+pub const Module_MinorVersion: &str = "$v->{'MinorVersion'}";
+#[allow(non_upper_case_globals)]
+pub const Module_Date: &str = "$v->{'Date'}";
+
+#[allow(non_upper_case_globals)]
+pub const Module_ApplicationDate2: &str = "$v->{'ApplicationDate2'}";
+#[allow(non_upper_case_globals)]
+pub const Module_ApplicationDate4: &str = "$v->{'ApplicationDate4'}";
+
+#[allow(non_upper_case_globals)]
+pub const Module_ComponentName: &str = "$v->{'ComponentName'}";
+#[allow(non_upper_case_globals)]
+pub const Module_ComponentBranch: &str = "$v->{'ComponentBranch'}";
+#[allow(non_upper_case_globals)]
+pub const Module_ComponentPath: &str = "$v->{'ComponentPath'}";
+
+#[allow(non_upper_case_globals)]
+pub const Module_FullVersion: &str = "$v->{'FullVersion'}";
+#[allow(non_upper_case_globals)]
+pub const Module_FullVersionAndDate: &str = "$v->{'FullVersionAndDate'}";
+#[allow(non_upper_case_globals)]
+pub const Module_HelpVersion: &str = "$v->{'HelpVersion'}";
+EOM
+    close($fh);
+}
+
+
+##
 # Syntax message
 sub syntax
 {
@@ -529,6 +644,10 @@ VersionBas   : A BASIC library, providing PROCinit_version and similarly
                Only updated if it exists.
 VersionFortran: Fortran version of the VersionNum file.
                Only updated if it exists.
+VersionD     : D version of the VersionNum file, for splicing in with
+               mixin(import("VersionD")). Only updated if it exists.
+VersionRust  : Rust version of the VersionNum file, for bringing in with
+               include!("VersionRust"). Only updated if it exists.
 
 Note: VersionLog is not supported.
 
@@ -569,6 +688,12 @@ If you need a BASIC file in your project:
 If you need a Fortran file in your project:
 
     $create VersionFortran
+    vmanage update
+
+If you need a D or Rust file in your project:
+
+    $create VersionD
+    $create VersionRust
     vmanage update
 EOM
     exit(0);
